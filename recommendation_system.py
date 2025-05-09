@@ -8,7 +8,7 @@ from scipy.sparse import csr_matrix
 # --- 1. Load uploaded CSV data ---
 @st.cache_data
 def load_uploaded_data(uploaded_file):
-    # Caches the uploaded CSV file to avoid reloading it on every rerun
+    # Load CSV file into DataFrame
     df = pd.read_csv(uploaded_file)
     return df
 
@@ -46,7 +46,7 @@ def preprocess_data(df):
 
     return df
 
-# --- 3. Create user-item matrix for user-based collaborative filtering ---
+# --- 3. Create user-item matrix for collaborative filtering ---
 def create_user_item_matrix(df):
     # Create matrix with users as rows, products as columns, and ratings as values
     user_item_matrix = df.pivot_table(index='User ID', columns='Product Name', values='Rating', fill_value=0)
@@ -89,40 +89,11 @@ def recommend_products(user_id, user_item_matrix, similarity_matrix, user_list, 
     recommended_products = dict(sorted(recommended_products.items(), key=lambda x: x[1], reverse=True))
     return list(recommended_products.items())[:top_n_products]
 
-# --- 6. Create item-user matrix for product-based collaborative filtering ---
-def create_item_user_matrix(df):
-    item_user_matrix = df.pivot_table(index='Product Name', columns='User ID', values='Rating', fill_value=0)
-    return item_user_matrix, csr_matrix(item_user_matrix.values)
-
-# --- 7. Compute cosine similarity between products ---
-def compute_product_similarity(sparse_matrix):
-    return cosine_similarity(sparse_matrix)
-
-# --- 8. Recommend similar products based on one product ---
-def recommend_similar_products(product_name, item_user_matrix, similarity_matrix, product_list, top_n=5):
-    if product_name not in product_list:
-        return []
-
-    product_idx = product_list.index(product_name)
-    similarity_scores = similarity_matrix[product_idx]
-
-    # Get top similar products (excluding the same product)
-    similar_products_idx = np.argsort(similarity_scores)[::-1]
-    similar_products_idx = [i for i in similar_products_idx if i != product_idx][:top_n]
-    similar_products = [product_list[i] for i in similar_products_idx]
-
-    return similar_products
-
-# --- 9. Handle Cold Start Problem: Recommend top-rated products ---
+# --- 6. Handle Cold Start Problem: Recommend top-rated products ---
 def get_top_rated_products(df, top_n=5):
     return df.groupby('Product Name')['Rating'].mean().sort_values(ascending=False).head(top_n)
 
-# --- 10. Display product details in UI ---
-def display_product_details(product_name, product_rating):
-    st.markdown(f"**{product_name}**")
-    st.markdown(f"⭐ {product_rating:.2f}/5")
-
-# --- 11. Streamlit UI and App Logic ---
+# --- 7. Streamlit UI and App Logic ---
 def main():
     st.set_page_config(page_title="🛍️ Amazon Products Recommender", page_icon="🛒", layout="wide")
     st.title("🛒 Personalized Product Recommendations")
@@ -130,6 +101,11 @@ def main():
     # Sidebar options for uploading file and tuning parameters
     st.sidebar.title("Upload Your Amazon Dataset 📄")
     uploaded_file = st.sidebar.file_uploader("Upload CSV file", type=["csv"])
+
+    # Additional filters for user input
+    category_filter = st.sidebar.selectbox("Select Product Category", options=["All Categories", "Electronics", "Fashion", "Books", "Home Appliances", "Others"])
+    min_rating = st.sidebar.slider("Minimum Rating", 1, 5, 4)
+    max_rating = st.sidebar.slider("Maximum Rating", 1, 5, 5)
 
     top_n_users = st.sidebar.slider("Top similar users to consider", 1, 10, 5)
     top_n_products = st.sidebar.slider("Top products to recommend", 1, 10, 5)
@@ -140,11 +116,16 @@ def main():
                 # Load and process data
                 df = load_uploaded_data(uploaded_file)
                 df = preprocess_data(df)
+
+                # Apply user filters dynamically
+                if category_filter != "All Categories":
+                    df = df[df['Product Name'].str.contains(category_filter, case=False, na=False)]
+
+                # Filter by rating range
+                df = df[(df['Rating'] >= min_rating) & (df['Rating'] <= max_rating)]
+
                 user_item_matrix, user_sparse_matrix = create_user_item_matrix(df)
                 user_cosine_sim = compute_user_similarity(user_sparse_matrix)
-
-                item_user_matrix, item_sparse_matrix = create_item_user_matrix(df)
-                product_cosine_sim = compute_product_similarity(item_sparse_matrix)
 
             st.success("Data loaded and processed successfully! 🎯")
 
@@ -181,31 +162,7 @@ def main():
                     st.warning("No product recommendations found for this user. Showing top-rated products instead.")
                     top_rated_products = get_top_rated_products(df, top_n=top_n_products)
                     for product_name, rating in top_rated_products.items():
-                        display_product_details(product_name, rating)
-
-                # Product-based recommendations
-                user_products = user_item_matrix.columns[user_item_matrix.loc[selected_user] > 0]
-                if not user_products.empty:
-                    selected_product = st.selectbox("Select a Product you've rated for similar products", user_products)
-
-                    if selected_product:
-                        similar_products = recommend_similar_products(
-                            selected_product,
-                            item_user_matrix,
-                            product_cosine_sim,
-                            list(item_user_matrix.index),
-                            top_n=top_n_products
-                        )
-
-                        st.subheader(f"🛍️ Products similar to **{selected_product}**:")
-                        if similar_products:
-                            for prod in similar_products:
-                                avg_rating = df[df['Product Name'] == prod]['Rating'].mean()
-                                display_product_details(prod, avg_rating)
-                        else:
-                            st.info("No similar products found.")
-                else:
-                    st.info("User has not rated any products yet.")
+                        st.markdown(f"**{product_name}** - ⭐ {rating:.2f}/5")
 
         except Exception as e:
             st.error(f"An error occurred: {e}")
